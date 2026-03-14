@@ -1,38 +1,134 @@
+<p align="center">
+  <img src="assets/rescanarr_logo.png" width="130">
+</p>
+
 # RescanArr
 
-RescanArr is a lightweight service that periodically triggers Radarr searches across your movie library to discover upgrades.
+RescanArr is a lightweight automation service that periodically triggers Radarr searches across a movie library using a randomized sweep model.
 
-Instead of relying only on Radarr’s built-in upgrade logic, RescanArr continuously sweeps the library and forces searches for randomly selected eligible movies.
-
-The goal is to gradually rescan the entire library over time and discover higher quality releases.
+Instead of relying solely on Radarr’s built-in upgrade behavior, RescanArr continuously cycles through the library and re-checks movies for potential upgrades. Movies that are searched are tagged so they are not selected again during the same sweep cycle. Once the entire library has been processed, the checked tag is removed, and the sweep starts over.
 
 ---
 
-## How It Works
+# Docker Image
 
-On a scheduled interval RescanArr will:
+A prebuilt Docker image is **not yet available**.
+
+For now, the container must be built locally using the provided Dockerfile.
+
+```bash
+git clone https://github.com/brodybuster/rescanarr.git
+cd rescanarr
+docker build -t rescanarr .
+```
+
+An official container image will be published in a future release.
+
+---
+
+# Features
+
+Current capabilities implemented in RescanArr:
+
+- Docker Container Deployment with PUID:GUID:TZ
+- Radarr API integration
+- Randomized upgrade sweep across the library
+- Tag-based tracking of processed movies
+- Ignore tag support to permanently exclude movies
+- Configurable sweep size (`count`)
+- Cron-based scheduling
+- Persistent logging to disk
+- Dry-run mode for testing
+
+---
+
+# How It Works
+
+Each scheduled run performs the following steps:
 
 1. Fetch all movies from Radarr  
-2. Determine which movies are eligible  
-3. Randomly select a configured number of movies  
+2. Filter movies that are eligible to participate in the sweep  
+3. Randomly select a subset of those movies  
 4. Trigger a Radarr search for each selected movie  
-5. Tag those movies as `checked` so they are not searched again in the same sweep
+5. Apply a `checked` tag so the movie is not searched again during the same sweep cycle  
+6. Remove `checked` tag after entire library has been processed
 
-Over time this performs a rolling scan across the entire library.
+This creates a rolling upgrade sweep across the entire library.
 
 ---
 
-## Eligibility Rules
+# Eligibility Model
 
-A movie is **base eligible** if:
+RescanArr uses a two-stage filtering model.
 
-- `monitored = true`
-- `status = released`
-- it does **not** have the `ignore` tag
+## Base Eligible
 
-A movie is **selectable** if:
+Movies that can participate in the sweep at all.
 
-- it is base eligible
-- it does **not** have the `checked` tag
+Rules:
 
-Only selectable movies are chosen for searches.
+- `monitored == true`
+- `status == released`
+- not tagged with the configured ignore tag
+
+## Selectable
+
+Movies that can be selected during the current sweep cycle.
+
+Rules:
+
+- base eligible
+- not tagged with the `checked` tag
+
+Only selectable movies are randomly chosen for search.
+
+---
+
+# Planned Features
+
+The following features are planned but not yet implemented.
+
+## Sonarr Integration
+
+Future versions of RescanArr are planned to support **Sonarr**, enabling the same randomized upgrade sweep behavior for television series.
+
+This will allow periodic searches for eligible series and episodes using the same tag-based sweep model currently used for Radarr movies.
+
+---
+
+# Configuration
+
+Example `config.yaml`:
+
+```yaml
+radarr_url: "http://radarr:7878"
+api_key: "YOUR_API_KEY"
+
+checked_tag_name: "checked"
+ignore_tag_name: "ignore"
+
+count: 10
+dry_run: true
+
+cron: "0 * * * *"
+
+request_timeout: 60
+```
+
+---
+
+# Logging
+
+Logs are written to:
+
+```
+/config/logs/rescanarr_YYYY-MM-DD.log
+```
+
+and also output to container stdout.
+
+---
+
+# License
+
+MIT

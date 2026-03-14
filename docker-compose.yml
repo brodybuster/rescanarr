@@ -1,0 +1,15 @@
+services:
+  rescanarr:
+    image: rescanarr:latest
+    container_name: rescanarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "America/New_York"
+    volumes:
+      - ./rescanarr:/config
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 5

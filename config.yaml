@@ -1,0 +1,12 @@
+radarr_url: "http://radarr:7878"
+api_key: "<api_key>"
+
+checked_tag_name: "checked"
+ignore_tag_name: "ignore"
+
+count: 10
+dry_run: true
+
+cron: "0 * * * *"
+
+request_timeout: 60
