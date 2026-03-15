@@ -1,104 +1,83 @@
-<p align="center">
-  <img src="assets/rescanarr_logo.png" width="130">
-</p>
-
 # RescanArr
 
-RescanArr is a lightweight automation service that periodically triggers Radarr searches across a movie library using a randomized sweep model.
+RescanArr is a lightweight service that periodically triggers Radarr searches for a rotating subset of movies in a large library.
 
-Instead of relying solely on Radarr’s built-in upgrade behavior, RescanArr continuously cycles through the library and re-checks movies for potential upgrades. Movies that are searched are tagged so they are not selected again during the same sweep cycle. Once the entire library has been processed, the checked tag is removed, and the sweep starts over.
+It is designed for large Radarr libraries where manual rescans or Radarr’s built-in search behavior becomes inefficient.
 
----
+RescanArr guarantees that every eligible movie eventually receives a search without repeatedly searching the same titles within a single sweep cycle.
 
-# Docker Image
+## How It Works
 
-A prebuilt Docker image is **not yet available**.
+RescanArr operates using **sweep cycles**.
 
-For now, the container must be built locally using the provided Dockerfile.
+A sweep cycle works like this:
 
-```bash
-git clone https://github.com/brodybuster/rescanarr.git
-cd rescanarr
-docker build -t rescanarr .
-```
+1. Fetch the entire Radarr movie library
+2. Identify **base eligible movies**
+3. Exclude movies already processed in the current cycle
+4. Randomly select a subset
+5. Trigger Radarr searches
+6. Apply a `checked` tag
+7. Continue until no selectable movies remain
+8. Remove `checked` from all currently checked movies
+9. Immediately start a new sweep cycle
 
-An official container image will be published in a future release.
+This guarantees:
 
----
+- No repeated searches during a cycle
+- Full coverage of eligible movies
+- Automatic cycle reset
+- Continuous operation
 
-# Features
+## Eligibility Rules
 
-Current capabilities implemented in RescanArr:
-
-- Docker Container Deployment with PUID:GUID:TZ
-- Radarr API integration
-- Randomized upgrade sweep across the library
-- Tag-based tracking of processed movies
-- Ignore tag support to permanently exclude movies
-- Configurable sweep size (`count`)
-- Cron-based scheduling
-- Persistent logging to disk
-- Dry-run mode for testing
-
----
-
-# How It Works
-
-Each scheduled run performs the following steps:
-
-1. Fetch all movies from Radarr  
-2. Filter movies that are eligible to participate in the sweep  
-3. Randomly select a subset of those movies  
-4. Trigger a Radarr search for each selected movie  
-5. Apply a `checked` tag so the movie is not searched again during the same sweep cycle  
-6. Remove `checked` tag after entire library has been processed
-
-This creates a rolling upgrade sweep across the entire library.
-
----
-
-# Eligibility Model
-
-RescanArr uses a two-stage filtering model.
-
-## Base Eligible
-
-Movies that can participate in the sweep at all.
-
-Rules:
+A movie is **base eligible** if:
 
 - `monitored == true`
 - `status == released`
-- not tagged with the configured ignore tag
+- it does **not** have the ignore tag
 
-## Selectable
+A movie is **selectable** if:
 
-Movies that can be selected during the current sweep cycle.
+- it is base eligible
+- it does **not** have the checked tag
 
-Rules:
+When the selectable pool reaches zero while base eligible movies still exist, RescanArr resets the sweep by removing the checked tag from **all currently checked movies in the library**, then continues in the same run.
 
-- base eligible
-- not tagged with the `checked` tag
+## Features
 
-Only selectable movies are randomly chosen for search.
+- Randomized movie selection
+- Sweep cycle search coverage
+- Automatic sweep reset
+- Ignore tag support
+- Cron-based scheduling
+- Radarr API integration
+- Config reload support
+- Non-root container runtime
+- Environment variable support (`PUID`, `PGID`, `TZ`)
+- File logging with rotation
+- Docker / Portainer stdout logging
 
----
+## Docker Image
 
-# Planned Features
+Published image:
 
-The following features are planned but not yet implemented.
+`ghcr.io/brodybuster/rescanarr`
 
-## Sonarr Integration
+Example tags:
 
-Future versions of RescanArr are planned to support **Sonarr**, enabling the same randomized upgrade sweep behavior for television series.
+- `ghcr.io/brodybuster/rescanarr:latest`
+- `ghcr.io/brodybuster/rescanarr:0.1.0`
 
-This will allow periodic searches for eligible series and episodes using the same tag-based sweep model currently used for Radarr movies.
+## Quick Start
 
----
+Create a configuration directory:
 
-# Configuration
+```bash
+mkdir -p config
+```
 
-Example `config.yaml`:
+Create `config/config.yaml`:
 
 ```yaml
 radarr_url: "http://radarr:7878"
@@ -107,28 +86,71 @@ api_key: "YOUR_API_KEY"
 checked_tag_name: "checked"
 ignore_tag_name: "ignore"
 
-count: 10
-dry_run: true
+count: 3
+dry_run: false
 
-cron: "0 * * * *"
+cron: "*/20 * * * *"
 
 request_timeout: 60
 ```
 
----
+## Docker Compose
 
-# Logging
+Example `docker-compose.yml`:
 
-Logs are written to:
+```yaml
+services:
+  rescanarr:
+    image: ghcr.io/brodybuster/rescanarr:latest
+    container_name: rescanarr
+    restart: unless-stopped
 
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "America/New_York"
+
+    volumes:
+      - ./config:/config
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
 ```
-/config/logs/rescanarr_YYYY-MM-DD.log
+
+Start the container:
+
+```bash
+docker compose up -d
 ```
 
-and also output to container stdout.
+## Environment Variables
 
----
+| Variable | Description |
+|---|---|
+| `PUID` | Runtime user ID |
+| `PGID` | Runtime group ID |
+| `TZ` | Timezone inside the container |
 
-# License
+Example:
 
-MIT
+```yaml
+environment:
+  PUID: "1000"
+  PGID: "1000"
+  TZ: "America/New_York"
+```
+
+## Configuration
+
+| Option | Description |
+|---|---|
+| `radarr_url` | Radarr base URL |
+| `api_key` | Radarr API key |
+| `checked_tag_name` | Tag used to track sweep progress |
+| `ignore_tag_name` | Tag used to exclude movies from sweeps |
+| `count` | Number of movies selected each run |
+| `dry_run` | Simulate actions without modifying Radarr |
+| `cron` | Cron schedule for sweep runs |
+| `request_timeout` | Radarr API timeout in seconds |
