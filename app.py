@@ -2,7 +2,7 @@
 
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -43,6 +43,19 @@ def parse_bool(value: Any, field_name: str) -> bool:
         f"Invalid boolean value for '{field_name}': {value!r}. "
         "Use true or false."
     )
+
+
+def format_movie_date_for_log(date_value: Optional[str]) -> str:
+    if not date_value:
+        return "missing"
+
+    try:
+        parsed = datetime.fromisoformat(date_value.replace("Z", "+00:00"))
+    except ValueError:
+        return str(date_value)
+
+    local_dt = parsed.astimezone()
+    return local_dt.strftime("%m-%d-%Y %I:%M:%S %p %Z")
 
 
 def load_config(path: Path) -> AppConfig:
@@ -493,11 +506,10 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     logger.info("Selected %s movie(s):", len(selected_movies))
     for movie in selected_movies:
         logger.info(
-            " - %s (%s) [id=%s] date_added=%s",
+            " - %s (%s)  [Date Added: %s]",
             movie["title"],
             movie["year"],
-            movie["id"],
-            movie.get("date_added") or "missing",
+            format_movie_date_for_log(movie.get("date_added")),
         )
 
     if config.dry_run:
@@ -578,11 +590,42 @@ def main() -> int:
         return 1
 
     scheduler = BlockingScheduler()
-    state = {"cron": initial_config.cron}
+    state = {"config": initial_config}
+
+    def apply_config_update(cfg: AppConfig, source: str) -> AppConfig:
+        previous_config = state["config"]
+        if cfg == previous_config:
+            return previous_config
+
+        previous_values = asdict(previous_config)
+        current_values = asdict(cfg)
+        changed_fields = [
+            field_name
+            for field_name in current_values
+            if current_values[field_name] != previous_values[field_name]
+        ]
+
+        logger.info("Config reloaded from %s", source)
+        for field_name in changed_fields:
+            logger.info(
+                " Config changed - %s: %r -> %r",
+                field_name,
+                previous_values[field_name],
+                current_values[field_name],
+            )
+
+        if cfg.cron != previous_config.cron:
+            new_trigger = CronTrigger.from_crontab(cfg.cron)
+            scheduler.reschedule_job("rescanarr_job", trigger=new_trigger)
+            logger.info("Cron updated: %s -> %s", previous_config.cron, cfg.cron)
+
+        state["config"] = cfg
+        return cfg
 
     def run_job() -> None:
         try:
             current_config = load_config(CONFIG_PATH)
+            current_config = apply_config_update(current_config, "run start")
             run_once(current_config, logger)
         except requests.HTTPError as exc:
             logger.error("HTTP error: %s", exc)
@@ -595,11 +638,7 @@ def main() -> int:
     def reload_schedule() -> None:
         try:
             cfg = load_config(CONFIG_PATH)
-            if cfg.cron != state["cron"]:
-                new_trigger = CronTrigger.from_crontab(cfg.cron)
-                scheduler.reschedule_job("rescanarr_job", trigger=new_trigger)
-                logger.info("Cron updated: %s -> %s", state["cron"], cfg.cron)
-                state["cron"] = cfg.cron
+            apply_config_update(cfg, "config watcher")
         except Exception:
             logger.exception("Config reload failed")
 
