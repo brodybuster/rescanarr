@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import logging
-import random
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -273,6 +272,7 @@ def get_base_eligible_movies(
                 "id": int(movie["id"]),
                 "title": str(movie.get("title", "Unknown")),
                 "year": movie.get("year", "Unknown"),
+                "date_added": (movie.get("movieFile") or {}).get("dateAdded"),
             }
         )
 
@@ -295,6 +295,7 @@ def get_selectable_movies(
                 "id": int(movie["id"]),
                 "title": str(movie.get("title", "Unknown")),
                 "year": movie.get("year", "Unknown"),
+                "date_added": (movie.get("movieFile") or {}).get("dateAdded"),
             }
         )
 
@@ -315,16 +316,13 @@ def get_checked_movie_ids(
     return checked_movie_ids
 
 
-def select_random_movies(candidate_movies: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
+def select_oldest_movies(candidate_movies: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
     if not candidate_movies:
         return []
 
-    if len(candidate_movies) <= count:
-        selected = list(candidate_movies)
-        random.shuffle(selected)
-        return selected
+    sorted_movies = sorted(candidate_movies, key=lambda movie: movie.get("date_added") or "")
 
-    return random.sample(candidate_movies, count)
+    return sorted_movies[:count]
 
 
 def maybe_reset_sweep(
@@ -479,8 +477,11 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     )
 
     logger.info("Selectable pool after reset evaluation: %s", len(selectable_movies))
-    logger.info("Selecting up to %s random selectable movie(s)...", config.count)
-    selected_movies = select_random_movies(selectable_movies, config.count)
+    logger.info(
+        "Selecting up to %s oldest selectable movie(s) by movie file date...",
+        config.count,
+    )
+    selected_movies = select_oldest_movies(selectable_movies, config.count)
 
     if not selected_movies:
         logger.info("No selectable movies found. Exiting.")
@@ -491,7 +492,13 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
 
     logger.info("Selected %s movie(s):", len(selected_movies))
     for movie in selected_movies:
-        logger.info(" - %s (%s) [id=%s]", movie["title"], movie["year"], movie["id"])
+        logger.info(
+            " - %s (%s) [id=%s] date_added=%s",
+            movie["title"],
+            movie["year"],
+            movie["id"],
+            movie.get("date_added") or "missing",
+        )
 
     if config.dry_run:
         logger.info("[DRY RUN] Would initiate %s search(es)", len(selected_movies))
