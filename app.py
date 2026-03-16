@@ -29,6 +29,23 @@ class AppConfig:
     request_timeout: int = 60
 
 
+def parse_bool(value: Any, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+
+    raise ValueError(
+        f"Invalid boolean value for '{field_name}': {value!r}. "
+        "Use true or false."
+    )
+
+
 def load_config(path: Path) -> AppConfig:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
@@ -38,13 +55,19 @@ def load_config(path: Path) -> AppConfig:
     if missing:
         raise ValueError(f"Missing required config keys: {', '.join(missing)}")
 
+    count = int(raw.get("count", 10))
+    if count <= 0:
+        raise ValueError("Config key 'count' must be greater than 0")
+
+    dry_run = parse_bool(raw.get("dry_run", False), "dry_run")
+
     return AppConfig(
         radarr_url=str(raw["radarr_url"]).rstrip("/"),
         api_key=str(raw["api_key"]),
         checked_tag_name=str(raw.get("checked_tag_name", "checked")),
         ignore_tag_name=str(raw.get("ignore_tag_name", "ignore")),
-        count=int(raw.get("count", 10)),
-        dry_run=bool(raw.get("dry_run", False)),
+        count=count,
+        dry_run=dry_run,
         cron=str(raw.get("cron", "0 * * * *")),
         request_timeout=int(raw.get("request_timeout", 60)),
     )
@@ -484,35 +507,45 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
 
     logger.info("Initiating searches...")
     selected_ids: list[int] = []
+    search_error: Optional[Exception] = None
+    search_error_traceback = None
 
-    for index, movie in enumerate(selected_movies, start=1):
-        logger.info(
-            "[%s/%s] Starting search for %s (%s) [id=%s]",
-            index,
-            len(selected_movies),
-            movie["title"],
-            movie["year"],
-            movie["id"],
-        )
-        response = client.search_movie(movie["id"])
-        command_id = response.get("id", "unknown")
-        command_name = response.get("name", "unknown")
-        logger.info(
-            "[%s/%s] Search command accepted: name=%s id=%s",
-            index,
-            len(selected_movies),
-            command_name,
-            command_id,
-        )
-        selected_ids.append(movie["id"])
+    try:
+        for index, movie in enumerate(selected_movies, start=1):
+            logger.info(
+                "[%s/%s] Starting search for %s (%s) [id=%s]",
+                index,
+                len(selected_movies),
+                movie["title"],
+                movie["year"],
+                movie["id"],
+            )
+            response = client.search_movie(movie["id"])
+            command_id = response.get("id", "unknown")
+            command_name = response.get("name", "unknown")
+            logger.info(
+                "[%s/%s] Search command accepted: name=%s id=%s",
+                index,
+                len(selected_movies),
+                command_name,
+                command_id,
+            )
+            selected_ids.append(movie["id"])
+    except Exception as exc:
+        search_error = exc
+        search_error_traceback = exc.__traceback__
 
-    logger.info(
-        "Applying checked tag '%s' to %s movie(s)...",
-        config.checked_tag_name,
-        len(selected_ids),
-    )
-    client.apply_tag_to_movies(selected_ids, checked_tag_id)
-    logger.info("Checked tag applied successfully")
+    if selected_ids:
+        logger.info(
+            "Applying checked tag '%s' to %s successfully queued movie(s)...",
+            config.checked_tag_name,
+            len(selected_ids),
+        )
+        client.apply_tag_to_movies(selected_ids, checked_tag_id)
+        logger.info("Checked tag applied successfully to completed searches")
+
+    if search_error is not None:
+        raise search_error.with_traceback(search_error_traceback)
 
     logger.info("RescanArr Finished")
     logger.info("======================================================================")
