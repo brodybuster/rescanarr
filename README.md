@@ -1,6 +1,6 @@
 # RescanArr
 
-RescanArr is a lightweight service that periodically triggers Radarr searches for a rotating subset of movies in a large library.
+RescanArr is a lightweight service that periodically triggers Radarr searches for a rotating subset of movies to determine if there are higher quality movies available.
 
 It is designed for large Radarr libraries where manual rescans or Radarr’s built-in search behavior becomes inefficient.
 
@@ -15,7 +15,7 @@ A sweep cycle works like this:
 1. Fetch the entire Radarr movie library
 2. Identify **base eligible movies**
 3. Exclude movies already processed in the current cycle
-4. Randomly select a subset
+4. Select x number of movies with the oldest dateAdded
 5. Trigger Radarr searches
 6. Apply a `checked` tag
 7. Continue until no selectable movies remain
@@ -46,17 +46,15 @@ When the selectable pool reaches zero while base eligible movies still exist, Re
 
 ## Features
 
-- Randomized movie selection
-- Sweep cycle search coverage
+- No WebGUI
+- No Bloated features
 - Automatic sweep reset
 - Ignore tag support
 - Cron-based scheduling
-- Radarr API integration
 - Config reload support
 - Non-root container runtime
 - Environment variable support (`PUID`, `PGID`, `TZ`)
 - File logging with rotation
-- Docker / Portainer stdout logging
 
 ## Docker Image
 
