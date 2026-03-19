@@ -5,6 +5,7 @@ checked_tag_name: "checked"
 ignore_tag_name: "ignore"
 
 count: 10
+min_age: 0
 dry_run: true
 
 cron: "0 * * * *"

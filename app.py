@@ -3,7 +3,7 @@
 import logging
 import sys
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
@@ -23,6 +23,7 @@ class AppConfig:
     checked_tag_name: str = "checked"
     ignore_tag_name: str = "ignore"
     count: int = 10
+    min_age: int = 0
     dry_run: bool = False
     cron: str = "0 * * * *"
     request_timeout: int = 60
@@ -58,6 +59,32 @@ def format_movie_date_for_log(date_value: Optional[str]) -> str:
     return local_dt.strftime("%m-%d-%Y %I:%M:%S %p %Z")
 
 
+def parse_iso_datetime(date_value: Optional[str]) -> Optional[datetime]:
+    if not date_value:
+        return None
+
+    try:
+        return datetime.fromisoformat(date_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def get_movie_date_added(movie: dict[str, Any]) -> Optional[str]:
+    return (movie.get("movieFile") or {}).get("dateAdded")
+
+
+def is_old_enough_for_search(movie: dict[str, Any], min_age_days: int) -> bool:
+    if min_age_days <= 0:
+        return True
+
+    date_added = parse_iso_datetime(get_movie_date_added(movie))
+    if date_added is None:
+        return True
+
+    min_allowed_date = datetime.now(timezone.utc) - timedelta(days=min_age_days)
+    return date_added <= min_allowed_date
+
+
 def load_config(path: Path) -> AppConfig:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
@@ -71,6 +98,10 @@ def load_config(path: Path) -> AppConfig:
     if count <= 0:
         raise ValueError("Config key 'count' must be greater than 0")
 
+    min_age = int(raw.get("min_age", 0))
+    if min_age < 0:
+        raise ValueError("Config key 'min_age' must be greater than or equal to 0")
+
     dry_run = parse_bool(raw.get("dry_run", False), "dry_run")
 
     return AppConfig(
@@ -79,6 +110,7 @@ def load_config(path: Path) -> AppConfig:
         checked_tag_name=str(raw.get("checked_tag_name", "checked")),
         ignore_tag_name=str(raw.get("ignore_tag_name", "ignore")),
         count=count,
+        min_age=min_age,
         dry_run=dry_run,
         cron=str(raw.get("cron", "0 * * * *")),
         request_timeout=int(raw.get("request_timeout", 60)),
@@ -196,7 +228,11 @@ def get_tag_id_by_name(tag_name: str, tags: list[dict[str, Any]]) -> Optional[in
     return None
 
 
-def is_base_eligible(movie: dict[str, Any], ignore_tag_id: Optional[int]) -> bool:
+def is_base_eligible(
+    movie: dict[str, Any],
+    ignore_tag_id: Optional[int],
+    min_age_days: int,
+) -> bool:
     tags = movie.get("tags") or []
 
     if movie.get("monitored") is not True:
@@ -204,6 +240,8 @@ def is_base_eligible(movie: dict[str, Any], ignore_tag_id: Optional[int]) -> boo
     if movie.get("status") != "released":
         return False
     if ignore_tag_id is not None and ignore_tag_id in tags:
+        return False
+    if not is_old_enough_for_search(movie, min_age_days):
         return False
 
     return True
@@ -213,10 +251,11 @@ def is_selectable(
     movie: dict[str, Any],
     checked_tag_id: int,
     ignore_tag_id: Optional[int],
+    min_age_days: int,
 ) -> bool:
     tags = movie.get("tags") or []
 
-    if not is_base_eligible(movie, ignore_tag_id):
+    if not is_base_eligible(movie, ignore_tag_id, min_age_days):
         return False
     if checked_tag_id in tags:
         return False
@@ -228,12 +267,14 @@ def compute_stats(
     movies: list[dict[str, Any]],
     checked_tag_id: int,
     ignore_tag_id: Optional[int],
+    min_age_days: int,
 ) -> dict[str, int]:
     stats = {
         "total": 0,
         "not_monitored": 0,
         "not_released": 0,
         "ignored": 0,
+        "too_recent": 0,
         "base_eligible": 0,
         "already_checked": 0,
         "selectable": 0,
@@ -259,6 +300,10 @@ def compute_stats(
             stats["ignored"] += 1
             continue
 
+        if not is_old_enough_for_search(movie, min_age_days):
+            stats["too_recent"] += 1
+            continue
+
         stats["base_eligible"] += 1
 
         if checked_tag_id in tags:
@@ -273,11 +318,12 @@ def compute_stats(
 def get_base_eligible_movies(
     movies: list[dict[str, Any]],
     ignore_tag_id: Optional[int],
+    min_age_days: int,
 ) -> list[dict[str, Any]]:
     eligible = []
 
     for movie in movies:
-        if not is_base_eligible(movie, ignore_tag_id):
+        if not is_base_eligible(movie, ignore_tag_id, min_age_days):
             continue
 
         eligible.append(
@@ -285,7 +331,7 @@ def get_base_eligible_movies(
                 "id": int(movie["id"]),
                 "title": str(movie.get("title", "Unknown")),
                 "year": movie.get("year", "Unknown"),
-                "date_added": (movie.get("movieFile") or {}).get("dateAdded"),
+                "date_added": get_movie_date_added(movie),
             }
         )
 
@@ -296,11 +342,12 @@ def get_selectable_movies(
     movies: list[dict[str, Any]],
     checked_tag_id: int,
     ignore_tag_id: Optional[int],
+    min_age_days: int,
 ) -> list[dict[str, Any]]:
     selectable = []
 
     for movie in movies:
-        if not is_selectable(movie, checked_tag_id, ignore_tag_id):
+        if not is_selectable(movie, checked_tag_id, ignore_tag_id, min_age_days):
             continue
 
         selectable.append(
@@ -308,7 +355,7 @@ def get_selectable_movies(
                 "id": int(movie["id"]),
                 "title": str(movie.get("title", "Unknown")),
                 "year": movie.get("year", "Unknown"),
-                "date_added": (movie.get("movieFile") or {}).get("dateAdded"),
+                "date_added": get_movie_date_added(movie),
             }
         )
 
@@ -403,6 +450,7 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     logger.info("Checked tag: %s", config.checked_tag_name)
     logger.info("Ignore tag: %s", config.ignore_tag_name)
     logger.info("Count: %s", config.count)
+    logger.info("Min age: %s day(s)", config.min_age)
     logger.info("Dry run: %s", config.dry_run)
     logger.info("Cron: %s", config.cron)
 
@@ -459,12 +507,13 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     movies = client.get_movies()
     logger.info("Fetched %s movie(s)", len(movies))
 
-    stats = compute_stats(movies, checked_tag_id, ignore_tag_id)
+    stats = compute_stats(movies, checked_tag_id, ignore_tag_id, config.min_age)
     logger.info("Filter summary:")
     logger.info(" Total library movies: %s", stats["total"])
     logger.info(" Excluded - not monitored: %s", stats["not_monitored"])
     logger.info(" Excluded - not released: %s", stats["not_released"])
     logger.info(" Excluded - ignore tag: %s", stats["ignored"])
+    logger.info(" Excluded - newer than min age: %s", stats["too_recent"])
     logger.info(" Base eligible: %s", stats["base_eligible"])
     logger.info(" Excluded - already checked within base-eligible pool: %s", stats["already_checked"])
     logger.info(" Selectable this cycle: %s", stats["selectable"])
@@ -472,8 +521,13 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
 
     logger.info("Building sweep pools...")
     checked_movie_ids = get_checked_movie_ids(movies, checked_tag_id)
-    base_eligible_movies = get_base_eligible_movies(movies, ignore_tag_id)
-    selectable_movies = get_selectable_movies(movies, checked_tag_id, ignore_tag_id)
+    base_eligible_movies = get_base_eligible_movies(movies, ignore_tag_id, config.min_age)
+    selectable_movies = get_selectable_movies(
+        movies,
+        checked_tag_id,
+        ignore_tag_id,
+        config.min_age,
+    )
 
     logger.info("Checked movie ids collected across full library: %s", len(checked_movie_ids))
     logger.info("Base eligible movie objects collected: %s", len(base_eligible_movies))

@@ -36,6 +36,7 @@ A movie is **base eligible** if:
 - `monitored == true`
 - `status == released`
 - it does **not** have the ignore tag
+- its `dateAdded` is at least `min_age` days old
 
 A movie is **selectable** if:
 
@@ -85,6 +86,7 @@ checked_tag_name: "checked"
 ignore_tag_name: "ignore"
 
 count: 3
+min_age: 0
 dry_run: false
 
 cron: "*/20 * * * *"
@@ -149,6 +151,7 @@ environment:
 | `checked_tag_name` | Tag used to track sweep progress |
 | `ignore_tag_name` | Tag used to exclude movies from sweeps |
 | `count` | Number of movies selected each run |
+| `min_age` | Minimum age in days that a movie's `dateAdded` must be before it can be searched |
 | `dry_run` | Simulate actions without modifying Radarr |
 | `cron` | Cron schedule for sweep runs |
 | `request_timeout` | Radarr API timeout in seconds |
