@@ -7,12 +7,16 @@ APP_UID="${PUID:-1000}"
 APP_GID="${PGID:-1000}"
 APP_TZ="${TZ:-UTC}"
 
-echo "Starting rescanarr entrypoint"
-echo "Requested UID:GID = ${APP_UID}:${APP_GID}"
-echo "Requested TZ = ${APP_TZ}"
+log() {
+  TZ="${APP_TZ}" date '+[%Y-%m-%d %H:%M:%S]'" $*"
+}
+
+log "Starting rescanarr entrypoint"
+log "Requested UID:GID = ${APP_UID}:${APP_GID}"
+log "Requested TZ = ${APP_TZ}"
 
 if [ "$(id -u)" != "0" ]; then
-  echo "Container is not running as root; cannot remap UID/GID. Starting as current user."
+  log "Container is not running as root; cannot remap UID/GID. Starting as current user."
   exec "$@"
 fi
 
@@ -20,7 +24,7 @@ if [ -n "${APP_TZ}" ] && [ -f "/usr/share/zoneinfo/${APP_TZ}" ]; then
   ln -snf "/usr/share/zoneinfo/${APP_TZ}" /etc/localtime
   echo "${APP_TZ}" > /etc/timezone
 else
-  echo "Warning: timezone '${APP_TZ}' not found; leaving default timezone in place"
+  log "Warning: timezone '${APP_TZ}' not found; leaving default timezone in place"
 fi
 
 CURRENT_GID="$(getent group "${APP_GROUP}" | cut -d: -f3)"
@@ -39,5 +43,5 @@ mkdir -p /config/logs
 chown -R "${APP_UID}:${APP_GID}" /config || true
 chown -R "${APP_UID}:${APP_GID}" /app || true
 
-echo "Launching as ${APP_USER} (${APP_UID}:${APP_GID})"
+log "Launching as ${APP_USER} (${APP_UID}:${APP_GID})"
 exec gosu "${APP_UID}:${APP_GID}" "$@"
