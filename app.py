@@ -448,9 +448,6 @@ def maybe_reset_sweep(
 
 
 def run_once(config: AppConfig, logger: logging.Logger) -> None:
-    logger.info("======================================================================")
-    logger.info("RUN START %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    logger.info("======================================================================")
     logger.info("RescanArr Starting")
     logger.info("Radarr URL: %s", config.radarr_url)
     logger.info("Checked tag: %s", config.checked_tag_name)
@@ -558,9 +555,6 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
 
     if not selected_movies:
         logger.info("No selectable movies found. Exiting.")
-        logger.info("======================================================================")
-        logger.info("RUN END %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        logger.info("======================================================================")
         return
 
     logger.info("Selected %s movie(s):", len(selected_movies))
@@ -579,9 +573,6 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
             config.checked_tag_name,
         )
         logger.info("Dry run complete")
-        logger.info("======================================================================")
-        logger.info("RUN END %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        logger.info("======================================================================")
         return
 
     logger.info("Initiating searches...")
@@ -627,9 +618,6 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
         raise search_error.with_traceback(search_error_traceback)
 
     logger.info("RescanArr Finished")
-    logger.info("======================================================================")
-    logger.info("RUN END %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    logger.info("======================================================================")
 
 
 def main() -> int:

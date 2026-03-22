@@ -103,6 +103,13 @@ def resolve_config_path(app, cli_config_path: str | None):
     sys.exit("App module must define CONFIG_PATH or pass --config-path.")
 
 
+def log_run_banner(logger, label: str, timestamp: datetime) -> None:
+    formatted = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    logger.info("======================================================================")
+    logger.info("%s %s", label, formatted)
+    logger.info("======================================================================")
+
+
 def main() -> int:
     args = parse_args()
     app = load_app(args.app_module)
@@ -123,8 +130,6 @@ def main() -> int:
     logger.info("Log target %s", log_target)
 
     last_config = initial_config
-    run_number = 1
-
     while not shutdown_requested:
         try:
             current_config = app.load_config(config_path)
@@ -151,7 +156,11 @@ def main() -> int:
             cron_schedule = get_cron_schedule(app, current_config)
             if not cron_schedule:
                 logger.info("No CRON_SCHEDULE set; running once and exiting")
-                app.run_once(current_config, logger)
+                log_run_banner(logger, "RUN START", current_time())
+                try:
+                    app.run_once(current_config, logger)
+                finally:
+                    log_run_banner(logger, "RUN END", current_time())
                 return 0
 
             from croniter import croniter
@@ -185,9 +194,11 @@ def main() -> int:
                         )
                 last_config = run_config
 
-            logger.info("Starting scheduled run #%s", run_number)
-            app.run_once(run_config, logger)
-            run_number += 1
+            log_run_banner(logger, "RUN START", current_time())
+            try:
+                app.run_once(run_config, logger)
+            finally:
+                log_run_banner(logger, "RUN END", current_time())
         except Exception:
             logger.exception("Run failed")
 
