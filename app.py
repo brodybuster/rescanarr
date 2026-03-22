@@ -4,12 +4,13 @@ import logging
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
-from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
 import yaml
+
+from logging_setup import setup_application_logger
 
 CONFIG_PATH = Path("/config/config.yaml")
 
@@ -126,37 +127,11 @@ def get_cron_schedule(config: AppConfig) -> str | None:
 
 
 def setup_logging(config_path: Path) -> tuple[logging.Logger, Path]:
-    config_dir = config_path.parent
-    log_dir = config_dir / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    log_file = log_dir / "rescanarr.log"
-
-    formatter = logging.Formatter("[%(asctime)s] %(message)s", "%Y-%m-%d %H:%M:%S")
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-
-    file_handler = TimedRotatingFileHandler(
-        filename=log_file,
-        when="midnight",
-        interval=1,
-        backupCount=14,
-        encoding="utf-8",
+    logger, log_file = setup_application_logger(
+        app_name="rescanarr",
+        log_filename="rescanarr.log",
+        log_dir=config_path.parent / "logs",
     )
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-    file_handler.suffix = "%Y-%m-%d"
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.handlers.clear()
-    root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
-
-    logger = logging.getLogger("rescanarr")
-    logger.setLevel(logging.INFO)
 
     return logger, log_file
 

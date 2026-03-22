@@ -18,6 +18,7 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py /app/app.py
+COPY logging_setup.py /app/logging_setup.py
 COPY scheduler.py /app/scheduler.py
 COPY entrypoint.sh /app/entrypoint.sh
 
