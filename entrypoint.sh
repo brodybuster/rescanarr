@@ -3,45 +3,47 @@ set -eu
 
 APP_USER="appuser"
 APP_GROUP="appgroup"
-APP_UID="${PUID:-1000}"
-APP_GID="${PGID:-1000}"
-APP_TZ="${TZ:-UTC}"
+APP_HOME="/app"
+
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
+TZ_VALUE="${TZ:-UTC}"
 
 log() {
-  TZ="${APP_TZ}" date '+[%Y-%m-%d %H:%M:%S]'" $*"
+    TZ="${TZ_VALUE}" date '+[%Y-%m-%dT%H:%M:%S%:z]'" $*"
 }
 
 log "Starting rescanarr entrypoint"
-log "Requested UID:GID = ${APP_UID}:${APP_GID}"
-log "Requested TZ = ${APP_TZ}"
+log "Requested UID:GID = ${PUID}:${PGID}"
+log "Requested TZ = ${TZ_VALUE}"
 
 if [ "$(id -u)" != "0" ]; then
   log "Container is not running as root; cannot remap UID/GID. Starting as current user."
   exec "$@"
 fi
 
-if [ -n "${APP_TZ}" ] && [ -f "/usr/share/zoneinfo/${APP_TZ}" ]; then
-  ln -snf "/usr/share/zoneinfo/${APP_TZ}" /etc/localtime
-  echo "${APP_TZ}" > /etc/timezone
+if [ -n "${TZ_VALUE}" ] && [ -f "/usr/share/zoneinfo/${TZ_VALUE}" ]; then
+  ln -snf "/usr/share/zoneinfo/${TZ_VALUE}" /etc/localtime
+  echo "${TZ_VALUE}" > /etc/timezone
 else
-  log "Warning: timezone '${APP_TZ}' not found; leaving default timezone in place"
+  log "Warning: timezone '${TZ_VALUE}' not found; leaving default timezone in place"
 fi
 
 CURRENT_GID="$(getent group "${APP_GROUP}" | cut -d: -f3)"
 CURRENT_UID="$(id -u "${APP_USER}")"
 
-if [ "${CURRENT_GID}" != "${APP_GID}" ]; then
-  groupmod -o -g "${APP_GID}" "${APP_GROUP}"
+if [ "${CURRENT_GID}" != "${PGID}" ]; then
+  groupmod -o -g "${PGID}" "${APP_GROUP}"
 fi
 
-if [ "${CURRENT_UID}" != "${APP_UID}" ]; then
-  usermod -o -u "${APP_UID}" -g "${APP_GID}" "${APP_USER}"
+if [ "${CURRENT_UID}" != "${PUID}" ]; then
+  usermod -o -u "${PUID}" -g "${PGID}" "${APP_USER}"
 fi
 
 mkdir -p /config/logs
 
-chown -R "${APP_UID}:${APP_GID}" /config || true
-chown -R "${APP_UID}:${APP_GID}" /app || true
+chown -R "${PUID}:${PGID}" /config || true
+chown -R "${PUID}:${PGID}" /app || true
 
-log "Launching as ${APP_USER} (${APP_UID}:${APP_GID})"
-exec gosu "${APP_UID}:${APP_GID}" "$@"
+log "Launching as ${APP_USER} (${PUID}:${PGID})"
+exec gosu "${PUID}:${PGID}" "$@"

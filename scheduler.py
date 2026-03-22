@@ -11,7 +11,9 @@ import sys
 import time
 from datetime import datetime
 from typing import Optional
-from zoneinfo import ZoneInfo
+
+from logging_setup import current_time, log_banner
+
 
 shutdown_requested = False
 
@@ -46,18 +48,6 @@ def parse_args() -> argparse.Namespace:
         help="Override the worker config path. Defaults to the app module CONFIG_PATH.",
     )
     return parser.parse_args()
-
-
-def current_time() -> datetime:
-    import os
-
-    tz_name = os.environ.get("TZ")
-    if tz_name:
-        try:
-            return datetime.now(ZoneInfo(tz_name))
-        except Exception:
-            pass
-    return datetime.now().astimezone()
 
 
 def sleep_until(next_run: datetime, logger) -> bool:
@@ -101,13 +91,6 @@ def resolve_config_path(app, cli_config_path: str | None):
     if hasattr(app, "CONFIG_PATH"):
         return app.CONFIG_PATH
     sys.exit("App module must define CONFIG_PATH or pass --config-path.")
-
-
-def log_run_banner(logger, label: str, timestamp: datetime) -> None:
-    formatted = timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    logger.info("======================================================================")
-    logger.info("%s %s", label, formatted)
-    logger.info("======================================================================")
 
 
 def main() -> int:
@@ -156,11 +139,11 @@ def main() -> int:
             cron_schedule = get_cron_schedule(app, current_config)
             if not cron_schedule:
                 logger.info("No CRON_SCHEDULE set; running once and exiting")
-                log_run_banner(logger, "RUN START", current_time())
+                log_banner(logger, "RUN START")
                 try:
                     app.run_once(current_config, logger)
                 finally:
-                    log_run_banner(logger, "RUN END", current_time())
+                    log_banner(logger, "RUN END")
                 return 0
 
             from croniter import croniter
@@ -173,7 +156,7 @@ def main() -> int:
             continue
 
         logger.info("Configured cron schedule: %s", cron_schedule)
-        logger.info("Next scheduled run at %s", next_run.strftime("%Y-%m-%d %H:%M:%S %Z"))
+        logger.info("Next scheduled run at %s", next_run.isoformat(timespec="seconds"))
 
         if not sleep_until(next_run, logger):
             break
@@ -194,11 +177,11 @@ def main() -> int:
                         )
                 last_config = run_config
 
-            log_run_banner(logger, "RUN START", current_time())
+            log_banner(logger, "RUN START")
             try:
                 app.run_once(run_config, logger)
             finally:
-                log_run_banner(logger, "RUN END", current_time())
+                log_banner(logger, "RUN END")
         except Exception:
             logger.exception("Run failed")
 
