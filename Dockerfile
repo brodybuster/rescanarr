@@ -8,7 +8,7 @@ ENV PUID=1000
 ENV PGID=1000
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tzdata gosu \
+ && apt-get install -y --no-install-recommends tzdata gosu tini \
  && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 1000 appgroup \
@@ -18,9 +18,10 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py /app/app.py
+COPY scheduler.py /app/scheduler.py
 COPY entrypoint.sh /app/entrypoint.sh
 
 RUN chmod +x /app/entrypoint.sh
 
-ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["python", "/app/app.py"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
+CMD ["python", "/app/scheduler.py"]
