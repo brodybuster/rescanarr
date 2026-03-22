@@ -10,8 +10,6 @@ from typing import Any, Optional
 
 import requests
 import yaml
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 CONFIG_PATH = Path("/config/config.yaml")
 
@@ -117,6 +115,16 @@ def load_config(path: Path) -> AppConfig:
     )
 
 
+def config_to_dict(config: AppConfig) -> dict[str, object]:
+    values = asdict(config)
+    values["api_key"] = "***"
+    return values
+
+
+def get_cron_schedule(config: AppConfig) -> str | None:
+    return config.cron
+
+
 def setup_logging(config_path: Path) -> tuple[logging.Logger, Path]:
     config_dir = config_path.parent
     log_dir = config_dir / "logs"
@@ -146,8 +154,6 @@ def setup_logging(config_path: Path) -> tuple[logging.Logger, Path]:
     root_logger.handlers.clear()
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
-
-    logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
     logger = logging.getLogger("rescanarr")
     logger.setLevel(logging.INFO)
@@ -628,7 +634,7 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
 
 def main() -> int:
     try:
-        initial_config = load_config(CONFIG_PATH)
+        config = load_config(CONFIG_PATH)
         logger, log_file = setup_logging(CONFIG_PATH)
     except Exception as exc:
         print(f"Failed to load config: {exc}", file=sys.stderr)
@@ -638,87 +644,16 @@ def main() -> int:
     logger.info("Log file %s", log_file)
 
     try:
-        initial_trigger = CronTrigger.from_crontab(initial_config.cron)
-    except Exception as exc:
-        logger.error("Invalid cron expression '%s': %s", initial_config.cron, exc)
+        run_once(config, logger)
+    except requests.HTTPError as exc:
+        logger.error("HTTP error: %s", exc)
+        if exc.response is not None:
+            logger.error("Response status: %s", exc.response.status_code)
+            logger.error("Response body: %s", exc.response.text)
         return 1
-
-    scheduler = BlockingScheduler()
-    state = {"config": initial_config}
-
-    def apply_config_update(cfg: AppConfig, source: str) -> AppConfig:
-        previous_config = state["config"]
-        if cfg == previous_config:
-            return previous_config
-
-        previous_values = asdict(previous_config)
-        current_values = asdict(cfg)
-        changed_fields = [
-            field_name
-            for field_name in current_values
-            if current_values[field_name] != previous_values[field_name]
-        ]
-
-        logger.info("Config reloaded from %s", source)
-        for field_name in changed_fields:
-            logger.info(
-                " Config changed - %s: %r -> %r",
-                field_name,
-                previous_values[field_name],
-                current_values[field_name],
-            )
-
-        if cfg.cron != previous_config.cron:
-            new_trigger = CronTrigger.from_crontab(cfg.cron)
-            scheduler.reschedule_job("rescanarr_job", trigger=new_trigger)
-            logger.info("Cron updated: %s -> %s", previous_config.cron, cfg.cron)
-
-        state["config"] = cfg
-        return cfg
-
-    def run_job() -> None:
-        try:
-            current_config = load_config(CONFIG_PATH)
-            current_config = apply_config_update(current_config, "run start")
-            run_once(current_config, logger)
-        except requests.HTTPError as exc:
-            logger.error("HTTP error: %s", exc)
-            if exc.response is not None:
-                logger.error("Response status: %s", exc.response.status_code)
-                logger.error("Response body: %s", exc.response.text)
-        except Exception:
-            logger.exception("Run failed")
-
-    def reload_schedule() -> None:
-        try:
-            cfg = load_config(CONFIG_PATH)
-            apply_config_update(cfg, "config watcher")
-        except Exception:
-            logger.exception("Config reload failed")
-
-    scheduler.add_job(
-        run_job,
-        trigger=initial_trigger,
-        id="rescanarr_job",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        reload_schedule,
-        trigger="interval",
-        seconds=60,
-        id="config_watcher",
-        max_instances=1,
-        coalesce=True,
-    )
-
-    logger.info("Scheduler started with cron %s", initial_config.cron)
-
-    try:
-        scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Scheduler stopped")
-        return 0
+    except Exception:
+        logger.exception("Run failed")
+        return 1
 
     return 0
 
