@@ -1,0 +1,11 @@
+WORKFLOW.md
+
+# macOS
+.DS_Store
+
+# Editor settings
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
