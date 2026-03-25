@@ -1,0 +1,18 @@
+services:
+  rescanarr:
+    image: ghcr.io/brodybuster/rescanarr:latest
+    container_name: rescanarr
+    restart: unless-stopped
+
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "America/New_York"
+
+    volumes:
+      - ./config:/config
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
