@@ -1,11 +1,38 @@
-WORKFLOW.md
-
-# macOS
+# OS junk
 .DS_Store
+Thumbs.db
+Desktop.ini
 
 # Editor settings
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# Windows
-Thumbs.db
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Build outputs
+build/
+dist/
+coverage/
+.tmp/
+tmp/
+
+# Local project notes
+WORKFLOW.md

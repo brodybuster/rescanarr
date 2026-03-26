@@ -17,6 +17,7 @@ from logging_setup import current_time, log_banner
 
 
 shutdown_requested = False
+CONFIG_POLL_INTERVAL_SECONDS = 60
 
 
 def load_app(app_module: str):
@@ -51,15 +52,51 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def sleep_until(next_run: datetime, logger) -> bool:
+def log_config_changes(logger, app, previous_config, current_config, source: str) -> None:
+    previous_values = config_to_dict(app, previous_config)
+    current_values = config_to_dict(app, current_config)
+    logger.info("Config reloaded from %s", source)
+    for field_name in sorted(set(previous_values) | set(current_values)):
+        previous_value = previous_values.get(field_name)
+        current_value = current_values.get(field_name)
+        if current_value != previous_value:
+            logger.info(
+                " Config changed - %s: %r -> %r",
+                field_name,
+                previous_value,
+                current_value,
+            )
+
+
+def wait_for_next_run(app, config_path, logger, current_config, next_run: datetime):
+    next_config_check = time.monotonic() + CONFIG_POLL_INTERVAL_SECONDS
+
     while not shutdown_requested:
         remaining_seconds = (next_run - current_time()).total_seconds()
         if remaining_seconds <= 0:
-            return True
+            return "run", current_config
+
+        if time.monotonic() >= next_config_check:
+            next_config_check = time.monotonic() + CONFIG_POLL_INTERVAL_SECONDS
+            try:
+                reloaded_config = app.load_config(config_path)
+            except Exception:
+                logger.exception("Config reload failed while waiting for next scheduled run")
+            else:
+                if reloaded_config != current_config:
+                    log_config_changes(
+                        logger,
+                        app,
+                        current_config,
+                        reloaded_config,
+                        "wait loop",
+                    )
+                    return "recompute", reloaded_config
+
         time.sleep(min(remaining_seconds, 1))
 
     logger.info("Shutdown requested before next scheduled run")
-    return False
+    return "shutdown", current_config
 
 
 def config_to_dict(app, config) -> dict[str, object]:
@@ -131,17 +168,7 @@ def main() -> int:
             continue
 
         if current_config != last_config:
-            previous_values = config_to_dict(app, last_config)
-            current_values = config_to_dict(app, current_config)
-            logger.info("Config reloaded from scheduler")
-            for field_name in current_values:
-                if current_values[field_name] != previous_values[field_name]:
-                    logger.info(
-                        " Config changed - %s: %r -> %r",
-                        field_name,
-                        previous_values[field_name],
-                        current_values[field_name],
-                    )
+            log_config_changes(logger, app, last_config, current_config, "scheduler")
             last_config = current_config
 
         try:
@@ -167,23 +194,23 @@ def main() -> int:
         logger.info("Configured cron schedule: %s", cron_schedule)
         logger.info("Next scheduled run at %s", next_run.isoformat(timespec="seconds"))
 
-        if not sleep_until(next_run, logger):
+        wait_result, current_config = wait_for_next_run(
+            app,
+            config_path,
+            logger,
+            current_config,
+            next_run,
+        )
+        if wait_result == "shutdown":
             break
+        if wait_result == "recompute":
+            last_config = current_config
+            continue
 
         try:
             run_config = app.load_config(config_path)
             if run_config != last_config:
-                previous_values = config_to_dict(app, last_config)
-                current_values = config_to_dict(app, run_config)
-                logger.info("Config reloaded from run start")
-                for field_name in current_values:
-                    if current_values[field_name] != previous_values[field_name]:
-                        logger.info(
-                            " Config changed - %s: %r -> %r",
-                            field_name,
-                            previous_values[field_name],
-                            current_values[field_name],
-                        )
+                log_config_changes(logger, app, last_config, run_config, "run start")
                 last_config = run_config
 
             log_banner(logger, "RUN START")
