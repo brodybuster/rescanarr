@@ -1,11 +1,15 @@
 radarr_url: "http://radarr:7878"
 api_key: "<api_key>"
 
-checked_tag_name: "checked"
 ignore_tag_name: "ignore"
 
 count: 10
-min_age: 0
+# Skip movies whose file was added recently.
+# This keeps Rescanarr away from fresh downloads that RSS would usually handle.
+minimum_age_days: 14
+# Skip movies that Radarr searched recently.
+# This avoids retrying stale titles too often when recent searches came up empty.
+search_cooldown_days: 30
 dry_run: true
 
 cron: "0 * * * *"

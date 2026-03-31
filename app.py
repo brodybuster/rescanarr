@@ -19,10 +19,10 @@ CONFIG_PATH = Path("/config/config.yaml")
 class AppConfig:
     radarr_url: str
     api_key: str
-    checked_tag_name: str = "checked"
     ignore_tag_name: str = "ignore"
     count: int = 10
-    min_age: int = 0
+    minimum_age_days: int = 0
+    search_cooldown_days: int = 30
     dry_run: bool = False
     cron: str = "0 * * * *"
     request_timeout: int = 60
@@ -72,6 +72,13 @@ def get_movie_date_added(movie: dict[str, Any]) -> Optional[str]:
     return (movie.get("movieFile") or {}).get("dateAdded")
 
 
+def get_movie_last_search_time(movie: dict[str, Any]) -> Optional[str]:
+    value = movie.get("lastSearchTime")
+    if value is None:
+        return None
+    return str(value)
+
+
 def is_old_enough_for_search(movie: dict[str, Any], min_age_days: int) -> bool:
     if min_age_days <= 0:
         return True
@@ -97,19 +104,29 @@ def load_config(path: Path) -> AppConfig:
     if count <= 0:
         raise ValueError("Config key 'count' must be greater than 0")
 
-    min_age = int(raw.get("min_age", 0))
-    if min_age < 0:
-        raise ValueError("Config key 'min_age' must be greater than or equal to 0")
+    minimum_age_days_raw = raw.get("minimum_age_days", 0)
+    minimum_age_days = int(minimum_age_days_raw)
+    if minimum_age_days < 0:
+        raise ValueError(
+            "Config key 'minimum_age_days' must be greater than or equal to 0"
+        )
+
+    search_cooldown_days_raw = raw.get("search_cooldown_days", 30)
+    search_cooldown_days = int(search_cooldown_days_raw)
+    if search_cooldown_days < 0:
+        raise ValueError(
+            "Config key 'search_cooldown_days' must be greater than or equal to 0"
+        )
 
     dry_run = parse_bool(raw.get("dry_run", False), "dry_run")
 
     return AppConfig(
         radarr_url=str(raw["radarr_url"]).rstrip("/"),
         api_key=str(raw["api_key"]),
-        checked_tag_name=str(raw.get("checked_tag_name", "checked")),
         ignore_tag_name=str(raw.get("ignore_tag_name", "ignore")),
         count=count,
-        min_age=min_age,
+        minimum_age_days=minimum_age_days,
+        search_cooldown_days=search_cooldown_days,
         dry_run=dry_run,
         cron=str(raw.get("cron", "0 * * * *")),
         request_timeout=int(raw.get("request_timeout", 60)),
@@ -161,45 +178,14 @@ class RadarrClient:
         response.raise_for_status()
         return response.json()
 
-    def put(self, path: str, payload: dict[str, Any]) -> Any:
-        response = self.session.put(self._url(path), json=payload, timeout=self.timeout)
-        response.raise_for_status()
-        if response.text.strip():
-            return response.json()
-        return None
-
     def get_tags(self) -> list[dict[str, Any]]:
         return self.get("/api/v3/tag")
-
-    def create_tag(self, label: str) -> int:
-        result = self.post("/api/v3/tag", {"label": label})
-        return int(result["id"])
 
     def get_movies(self) -> list[dict[str, Any]]:
         return self.get("/api/v3/movie")
 
     def search_movie(self, movie_id: int) -> dict[str, Any]:
         return self.post("/api/v3/command", {"name": "MoviesSearch", "movieIds": [movie_id]})
-
-    def apply_tag_operation(self, movie_ids: list[int], tag_id: int, operation: str) -> None:
-        if not movie_ids:
-            return
-
-        if operation not in {"add", "remove"}:
-            raise ValueError(f"Unsupported tag operation: {operation}")
-
-        payload = {
-            "movieIds": movie_ids,
-            "tags": [tag_id],
-            "applyTags": operation,
-        }
-        self.put("/api/v3/movie/editor", payload)
-
-    def apply_tag_to_movies(self, movie_ids: list[int], tag_id: int) -> None:
-        self.apply_tag_operation(movie_ids, tag_id, "add")
-
-    def remove_tag_from_movies(self, movie_ids: list[int], tag_id: int) -> None:
-        self.apply_tag_operation(movie_ids, tag_id, "remove")
 
 
 def get_tag_id_by_name(tag_name: str, tags: list[dict[str, Any]]) -> Optional[int]:
@@ -228,27 +214,23 @@ def is_base_eligible(
     return True
 
 
-def is_selectable(
-    movie: dict[str, Any],
-    checked_tag_id: int,
-    ignore_tag_id: Optional[int],
-    min_age_days: int,
-) -> bool:
-    tags = movie.get("tags") or []
-
-    if not is_base_eligible(movie, ignore_tag_id, min_age_days):
-        return False
-    if checked_tag_id in tags:
+def was_searched_recently(movie: dict[str, Any], search_cooldown_days: int) -> bool:
+    if search_cooldown_days <= 0:
         return False
 
-    return True
+    last_search_time = parse_iso_datetime(get_movie_last_search_time(movie))
+    if last_search_time is None:
+        return False
+
+    min_allowed_search_time = datetime.now(timezone.utc) - timedelta(days=search_cooldown_days)
+    return last_search_time > min_allowed_search_time
 
 
 def compute_stats(
     movies: list[dict[str, Any]],
-    checked_tag_id: int,
     ignore_tag_id: Optional[int],
     min_age_days: int,
+    search_cooldown_days: int,
 ) -> dict[str, int]:
     stats = {
         "total": 0,
@@ -257,17 +239,14 @@ def compute_stats(
         "ignored": 0,
         "too_recent": 0,
         "base_eligible": 0,
-        "already_checked": 0,
+        "searched_recently": 0,
+        "never_searched": 0,
         "selectable": 0,
-        "checked_anywhere": 0,
     }
 
     for movie in movies:
         stats["total"] += 1
         tags = movie.get("tags") or []
-
-        if checked_tag_id in tags:
-            stats["checked_anywhere"] += 1
 
         if movie.get("monitored") is not True:
             stats["not_monitored"] += 1
@@ -287,8 +266,11 @@ def compute_stats(
 
         stats["base_eligible"] += 1
 
-        if checked_tag_id in tags:
-            stats["already_checked"] += 1
+        if get_movie_last_search_time(movie) is None:
+            stats["never_searched"] += 1
+
+        if was_searched_recently(movie, search_cooldown_days):
+            stats["searched_recently"] += 1
             continue
 
         stats["selectable"] += 1
@@ -296,39 +278,18 @@ def compute_stats(
     return stats
 
 
-def get_base_eligible_movies(
-    movies: list[dict[str, Any]],
-    ignore_tag_id: Optional[int],
-    min_age_days: int,
-) -> list[dict[str, Any]]:
-    eligible = []
-
-    for movie in movies:
-        if not is_base_eligible(movie, ignore_tag_id, min_age_days):
-            continue
-
-        eligible.append(
-            {
-                "id": int(movie["id"]),
-                "title": str(movie.get("title", "Unknown")),
-                "year": movie.get("year", "Unknown"),
-                "date_added": get_movie_date_added(movie),
-            }
-        )
-
-    return eligible
-
-
 def get_selectable_movies(
     movies: list[dict[str, Any]],
-    checked_tag_id: int,
     ignore_tag_id: Optional[int],
     min_age_days: int,
+    search_cooldown_days: int,
 ) -> list[dict[str, Any]]:
     selectable = []
 
     for movie in movies:
-        if not is_selectable(movie, checked_tag_id, ignore_tag_id, min_age_days):
+        if not is_base_eligible(movie, ignore_tag_id, min_age_days):
+            continue
+        if was_searched_recently(movie, search_cooldown_days):
             continue
 
         selectable.append(
@@ -337,98 +298,44 @@ def get_selectable_movies(
                 "title": str(movie.get("title", "Unknown")),
                 "year": movie.get("year", "Unknown"),
                 "date_added": get_movie_date_added(movie),
+                "last_search_time": get_movie_last_search_time(movie),
             }
         )
 
     return selectable
 
 
-def get_checked_movie_ids(
-    movies: list[dict[str, Any]],
-    checked_tag_id: int,
-) -> list[int]:
-    checked_movie_ids: list[int] = []
-
-    for movie in movies:
-        tags = movie.get("tags") or []
-        if checked_tag_id in tags:
-            checked_movie_ids.append(int(movie["id"]))
-
-    return checked_movie_ids
-
-
 def select_oldest_movies(candidate_movies: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
     if not candidate_movies:
         return []
 
-    sorted_movies = sorted(candidate_movies, key=lambda movie: movie.get("date_added") or "")
+    minimum_datetime = datetime.min.replace(tzinfo=timezone.utc)
+
+    def movie_sort_key(movie: dict[str, Any]):
+        last_search_time = parse_iso_datetime(movie.get("last_search_time"))
+        date_added = parse_iso_datetime(movie.get("date_added"))
+        return (
+            last_search_time is not None,
+            last_search_time or minimum_datetime,
+            date_added or minimum_datetime,
+            str(movie.get("title", "")).lower(),
+        )
+
+    sorted_movies = sorted(candidate_movies, key=movie_sort_key)
 
     return sorted_movies[:count]
-
-
-def maybe_reset_sweep(
-    config: AppConfig,
-    logger: logging.Logger,
-    client: RadarrClient,
-    checked_tag_id: int,
-    checked_movie_ids: list[int],
-    base_eligible_movies: list[dict[str, Any]],
-    selectable_movies: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    if not base_eligible_movies:
-        logger.info("Reset condition not met: no base-eligible movies exist")
-        return selectable_movies
-
-    if selectable_movies:
-        logger.info(
-            "Reset condition not met: selectable pool still has %s candidate(s)",
-            len(selectable_movies),
-        )
-        return selectable_movies
-
-    logger.info("Reset condition met: base eligible > 0 and selectable == 0")
-    logger.info("Starting automatic sweep reset")
-    logger.info(
-        "Checked tag currently exists on %s movie(s) across the full library",
-        len(checked_movie_ids),
-    )
-
-    if not checked_movie_ids:
-        logger.info("No movies currently have the checked tag, so there is nothing to remove")
-        refreshed_selectable = list(base_eligible_movies)
-        logger.info("Post-reset selectable movie objects collected: %s", len(refreshed_selectable))
-        return refreshed_selectable
-
-    if config.dry_run:
-        logger.info(
-            "[DRY RUN] Would remove checked tag '%s' from %s movie(s) across the full library",
-            config.checked_tag_name,
-            len(checked_movie_ids),
-        )
-        logger.info("[DRY RUN] Simulating new sweep cycle after reset")
-    else:
-        logger.info(
-            "Removing checked tag '%s' from %s movie(s) across the full library...",
-            config.checked_tag_name,
-            len(checked_movie_ids),
-        )
-        client.remove_tag_from_movies(checked_movie_ids, checked_tag_id)
-        logger.info("Checked tag removed from all currently checked movie(s)")
-        logger.info("Sweep reset complete")
-        logger.info("New sweep cycle started within the current run")
-
-    refreshed_selectable = list(base_eligible_movies)
-    logger.info("Post-reset selectable movie objects collected: %s", len(refreshed_selectable))
-    return refreshed_selectable
 
 
 def run_once(config: AppConfig, logger: logging.Logger) -> None:
     logger.info("Rescanarr Starting")
     logger.info("Radarr URL: %s", config.radarr_url)
-    logger.info("Checked tag: %s", config.checked_tag_name)
     logger.info("Ignore tag: %s", config.ignore_tag_name)
     logger.info("Count: %s", config.count)
-    logger.info("Min age: %s day(s)", config.min_age)
+    logger.info("Minimum age: %s day(s)", config.minimum_age_days)
+    logger.info(
+        "Search cooldown: %s day(s)",
+        config.search_cooldown_days,
+    )
     logger.info("Dry run: %s", config.dry_run)
     logger.info("Cron: %s", config.cron)
 
@@ -441,32 +348,6 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     logger.info("Fetching Radarr tags...")
     tags = client.get_tags()
     logger.info("Fetched %s tag(s)", len(tags))
-
-    checked_tag_id = get_tag_id_by_name(config.checked_tag_name, tags)
-    if checked_tag_id is None:
-        if config.dry_run:
-            logger.info(
-                "[DRY RUN] Checked tag '%s' does not exist; would create it",
-                config.checked_tag_name,
-            )
-            checked_tag_id = -999001
-        else:
-            logger.info(
-                "Checked tag '%s' not found; creating it",
-                config.checked_tag_name,
-            )
-            checked_tag_id = client.create_tag(config.checked_tag_name)
-            logger.info(
-                "Created checked tag '%s' with id=%s",
-                config.checked_tag_name,
-                checked_tag_id,
-            )
-    else:
-        logger.info(
-            "Using existing checked tag '%s' with id=%s",
-            config.checked_tag_name,
-            checked_tag_id,
-        )
 
     ignore_tag_id = get_tag_id_by_name(config.ignore_tag_name, tags)
     if ignore_tag_id is not None:
@@ -485,7 +366,12 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     movies = client.get_movies()
     logger.info("Fetched %s movie(s)", len(movies))
 
-    stats = compute_stats(movies, checked_tag_id, ignore_tag_id, config.min_age)
+    stats = compute_stats(
+        movies,
+        ignore_tag_id,
+        config.minimum_age_days,
+        config.search_cooldown_days,
+    )
     logger.info("Filter summary:")
     logger.info(" Total library movies: %s", stats["total"])
     logger.info(" Excluded - not monitored: %s", stats["not_monitored"])
@@ -493,37 +379,24 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     logger.info(" Excluded - ignore tag: %s", stats["ignored"])
     logger.info(" Excluded - newer than min age: %s", stats["too_recent"])
     logger.info(" Base eligible: %s", stats["base_eligible"])
-    logger.info(" Excluded - already checked within base-eligible pool: %s", stats["already_checked"])
-    logger.info(" Selectable this cycle: %s", stats["selectable"])
-    logger.info(" Checked tag present anywhere in library: %s", stats["checked_anywhere"])
+    logger.info(
+        " Excluded - searched within minimum interval: %s",
+        stats["searched_recently"],
+    )
+    logger.info(" Never searched in Radarr: %s", stats["never_searched"])
+    logger.info(" Selectable this run: %s", stats["selectable"])
 
-    logger.info("Building sweep pools...")
-    checked_movie_ids = get_checked_movie_ids(movies, checked_tag_id)
-    base_eligible_movies = get_base_eligible_movies(movies, ignore_tag_id, config.min_age)
+    logger.info("Building candidate pool...")
     selectable_movies = get_selectable_movies(
         movies,
-        checked_tag_id,
         ignore_tag_id,
-        config.min_age,
+        config.minimum_age_days,
+        config.search_cooldown_days,
     )
 
-    logger.info("Checked movie ids collected across full library: %s", len(checked_movie_ids))
-    logger.info("Base eligible movie objects collected: %s", len(base_eligible_movies))
     logger.info("Selectable movie objects collected: %s", len(selectable_movies))
-
-    selectable_movies = maybe_reset_sweep(
-        config=config,
-        logger=logger,
-        client=client,
-        checked_tag_id=checked_tag_id,
-        checked_movie_ids=checked_movie_ids,
-        base_eligible_movies=base_eligible_movies,
-        selectable_movies=selectable_movies,
-    )
-
-    logger.info("Selectable pool after reset evaluation: %s", len(selectable_movies))
     logger.info(
-        "Selecting up to %s oldest selectable movie(s) by movie file date...",
+        "Selecting up to %s eligible movie(s) by oldest last search time...",
         config.count,
     )
     selected_movies = select_oldest_movies(selectable_movies, config.count)
@@ -535,23 +408,19 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     logger.info("Selected %s movie(s):", len(selected_movies))
     for movie in selected_movies:
         logger.info(
-            " - %s (%s)  [Date Added: %s]",
+            " - %s (%s)  [Last Search: %s] [Date Added: %s]",
             movie["title"],
             movie["year"],
+            format_movie_date_for_log(movie.get("last_search_time")),
             format_movie_date_for_log(movie.get("date_added")),
         )
 
     if config.dry_run:
         logger.info("[DRY RUN] Would initiate %s search(es)", len(selected_movies))
-        logger.info(
-            "[DRY RUN] Would apply checked tag '%s' to selected movies",
-            config.checked_tag_name,
-        )
         logger.info("Dry run complete")
         return
 
     logger.info("Initiating searches...")
-    selected_ids: list[int] = []
     search_error: Optional[Exception] = None
     search_error_traceback = None
 
@@ -575,19 +444,9 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
                 command_name,
                 command_id,
             )
-            selected_ids.append(movie["id"])
     except Exception as exc:
         search_error = exc
         search_error_traceback = exc.__traceback__
-
-    if selected_ids:
-        logger.info(
-            "Applying checked tag '%s' to %s successfully queued movie(s)...",
-            config.checked_tag_name,
-            len(selected_ids),
-        )
-        client.apply_tag_to_movies(selected_ids, checked_tag_id)
-        logger.info("Checked tag applied successfully to completed searches")
 
     if search_error is not None:
         raise search_error.with_traceback(search_error_traceback)
