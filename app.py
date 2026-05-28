@@ -181,6 +181,9 @@ class RadarrClient:
     def get_tags(self) -> list[dict[str, Any]]:
         return self.get("/api/v3/tag")
 
+    def get_queue(self) -> Any:
+        return self.get("/api/v3/queue")
+
     def get_movies(self) -> list[dict[str, Any]]:
         return self.get("/api/v3/movie")
 
@@ -193,6 +196,18 @@ def get_tag_id_by_name(tag_name: str, tags: list[dict[str, Any]]) -> Optional[in
         if tag.get("label") == tag_name:
             return int(tag["id"])
     return None
+
+
+def get_queue_records(queue_payload: Any) -> list[dict[str, Any]]:
+    if isinstance(queue_payload, list):
+        return [item for item in queue_payload if isinstance(item, dict)]
+
+    if isinstance(queue_payload, dict):
+        records = queue_payload.get("records")
+        if isinstance(records, list):
+            return [item for item in records if isinstance(item, dict)]
+
+    return []
 
 
 def is_base_eligible(
@@ -344,6 +359,14 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
         api_key=config.api_key,
         timeout=config.request_timeout,
     )
+
+    logger.info("Checking Radarr queue...")
+    queue_payload = client.get_queue()
+    queue_records = get_queue_records(queue_payload)
+    logger.info("Found %s item(s) in Radarr queue", len(queue_records))
+    if queue_records:
+        logger.info("Radarr queue is not empty; aborting this run and waiting for the next schedule")
+        return
 
     logger.info("Fetching Radarr tags...")
     tags = client.get_tags()
