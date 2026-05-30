@@ -14,8 +14,9 @@ Each run works like this:
 2. Identify base-eligible movies
 3. Exclude movies newer than `minimum_age_days`
 4. Exclude movies whose Radarr `lastSearchTime` is newer than `search_cooldown_days`
-5. Prioritize movies that have never been searched, then movies with the oldest `lastSearchTime`
-6. Trigger searches for up to `count` movies
+5. Abort the run early if Radarr's queue has more than `max_queue_items` entries
+6. Prioritize movies that have never been searched, then movies with the oldest `lastSearchTime`
+7. Trigger searches for up to `count` movies
 
 This keeps Rescanarr focused on stale backlog searches instead of repeatedly re-searching the same titles too soon.
 
@@ -85,6 +86,9 @@ minimum_age_days: 14
 # Skip movies that Radarr has searched recently, even if they are older library items.
 # Good for avoiding repeated backfill searches that usually come up empty.
 search_cooldown_days: 30
+# Abort the run if Radarr already has more than this many queue items.
+# Set to 0 to skip whenever any queue activity is present.
+max_queue_items: 0
 dry_run: false
 
 cron: "*/20 * * * *"
@@ -150,6 +154,7 @@ environment:
 | `count` | Number of movies selected each run |
 | `minimum_age_days` | Minimum age in days that a movie's `dateAdded` must be before it can be searched |
 | `search_cooldown_days` | Minimum number of days since Radarr last searched the movie before Rescanarr will search it again |
+| `max_queue_items` | Maximum number of Radarr queue items allowed before Rescanarr skips the current run |
 | `dry_run` | Simulate actions without modifying Radarr |
 | `cron` | Cron schedule for sweep runs |
 | `request_timeout` | Radarr API timeout in seconds |

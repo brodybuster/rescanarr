@@ -23,6 +23,7 @@ class AppConfig:
     count: int = 10
     minimum_age_days: int = 0
     search_cooldown_days: int = 30
+    max_queue_items: int = 0
     dry_run: bool = False
     cron: str = "0 * * * *"
     request_timeout: int = 60
@@ -118,6 +119,12 @@ def load_config(path: Path) -> AppConfig:
             "Config key 'search_cooldown_days' must be greater than or equal to 0"
         )
 
+    max_queue_items = int(raw.get("max_queue_items", 0))
+    if max_queue_items < 0:
+        raise ValueError(
+            "Config key 'max_queue_items' must be greater than or equal to 0"
+        )
+
     dry_run = parse_bool(raw.get("dry_run", False), "dry_run")
 
     return AppConfig(
@@ -127,6 +134,7 @@ def load_config(path: Path) -> AppConfig:
         count=count,
         minimum_age_days=minimum_age_days,
         search_cooldown_days=search_cooldown_days,
+        max_queue_items=max_queue_items,
         dry_run=dry_run,
         cron=str(raw.get("cron", "0 * * * *")),
         request_timeout=int(raw.get("request_timeout", 60)),
@@ -351,6 +359,7 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
         "Search cooldown: %s day(s)",
         config.search_cooldown_days,
     )
+    logger.info("Max queue items: %s", config.max_queue_items)
     logger.info("Dry run: %s", config.dry_run)
     logger.info("Cron: %s", config.cron)
 
@@ -364,8 +373,12 @@ def run_once(config: AppConfig, logger: logging.Logger) -> None:
     queue_payload = client.get_queue()
     queue_records = get_queue_records(queue_payload)
     logger.info("Found %s item(s) in Radarr queue", len(queue_records))
-    if queue_records:
-        logger.info("Radarr queue is not empty; aborting this run and waiting for the next schedule")
+    if len(queue_records) > config.max_queue_items:
+        logger.info(
+            "Radarr queue has %s item(s), which exceeds max_queue_items=%s; aborting this run and waiting for the next schedule",
+            len(queue_records),
+            config.max_queue_items,
+        )
         return
 
     logger.info("Fetching Radarr tags...")

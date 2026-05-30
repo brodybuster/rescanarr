@@ -10,6 +10,9 @@ minimum_age_days: 14
 # Skip movies that Radarr searched recently.
 # This avoids retrying stale titles too often when recent searches came up empty.
 search_cooldown_days: 30
+# Abort the run if Radarr already has more than this many queue items.
+# Set to 0 to skip whenever any queue activity is present.
+max_queue_items: 0
 dry_run: true
 
 cron: "0 * * * *"
